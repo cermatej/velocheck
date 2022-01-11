@@ -155,9 +155,9 @@ corr = df[features + [target]].corr().sort_values(target)[target]
 ################ MODELLING
 
 ################ RFR GRID SEARCH
-hyper_grid = {'n_estimators': [1000, 2000],
-              'max_features': ['auto', 10], # default
-              'min_samples_split': [4, 6]}
+hyper_grid = {'n_estimators': [1000, 2000], # before 500, 1000
+              'max_features': [15, 20],  # before 5, 10, 15
+              'min_2samples_split': [8, 12]}  # before 4,6,8
 rf = RandomForestRegressor()
 gs = GridSearchCV(estimator=rf,
                   param_grid=hyper_grid,
@@ -173,12 +173,14 @@ print(f'RMSE: {mean_squared_error(y_test, y_pred, squared=False)}')
 
 # %%
 ################# SAVE MODEL
-with open(r"models/rfr_6_400_10f.pickle", "wb") as out_file:
-  pickle.dump(rfr, out_file)
+with open(r"models/rfr_8_1000_15f.pickle", "wb") as file:
+  pickle.dump([rfr, X_train, X_test, test], file)
 # %%
 ################# LOAD MODEL
-with open(r"models/rfr_6_400_10f.pickle", "rb") as out_file:
-  rfr = pickle.load(out_file)
+with open(r"models/rfr_8_1000_15f.pickle", "rb") as file:
+  rfr, X_train, X_test, test = pickle.load(file)
+
+
 # %%
 
 def pred_topn(tst, model, top_n=10, debug=False):
@@ -209,72 +211,80 @@ def pred_topn(tst, model, top_n=10, debug=False):
 tst = X_test.copy()
 COLS_TO_ADD = [RACE_ID, 'race_race_rank', 'rider_rider_id']
 tst[COLS_TO_ADD] = test[COLS_TO_ADD]
-for top_n in [10]:
-  pred_topn(tst, model=rfr, top_n=top_n, debug=True)
+for top_n in [10,1]:
+  pred_topn(tst, model=rfr, top_n=top_n, debug=False)
+
+# todo find most valuable features
+# todo try XGBoost
 
 # %%
-def pred_topn_split(data, model, top_n=10, test_frac=.2, debug=False):
-  u_races = data[RACE_ID].sample(frac=1, random_state=111).unique()  # shuffle dataset
-  nu_races = len(u_races)
-  # 80/20 train test split cross validation, predicting every race from test iteratively
-  test_size = math.ceil(len(u_races) * test_frac)
+im_rfr = pd.Series(rfr.feature_importances_, index = X_train.columns).sort_values()
+im_rfr.plot(kind='barh')
+plt.show()
 
-  accs = []
-  # for every CV interval
-  for pred_j in range(math.ceil(nu_races / test_size)):
-
-    sel_fr = pred_j * test_size
-    sel_to = (pred_j + 1) * test_size if (pred_j + 1) * test_size < nu_races else nu_races
-    test_races = list(u_races[sel_fr:sel_to])
-
-    if (debug):
-      print(f'Testing on races {sel_fr}-{sel_to}/{nu_races}')
-
-    train = data[~data[RACE_ID].isin(test_races)]
-    X_train = train[features]
-    y_train = train[target]
-    # fit the model for the training data
-    pl = Pipeline(steps=[
-      ('scaler', StandardScaler()),
-      ('model', model)
-    ])
-    pl.fit(X_train, y_train)
-
-    for i, pred_race in enumerate(test_races):
-      test = data[data[RACE_ID] == pred_race]
-      X_test = test[features]
-
-      test[PRED_I] = pl.predict(X_test)  # predict values
-
-      top_pred = test.sort_values(PRED_I, ascending=False).head(top_n)
-      i_acc = sum(top_pred['race_race_rank'] <= top_n) / top_n
-      accs.append(i_acc)
-      if (debug):
-        print(
-          f"[{i + 1}/{len(test_races)}] Race: {pred_race} (ProfileScore: {int(test['race_profile-score'].head(1))})")
-        print(top_pred[['rider_rider_id', 'race_race_rank', PRED_I]])
-        print(f"Accuracy: {i_acc}")
-
-  print(f"""
-    Predicted top competitors: {top_n}
-    Unique races: {len(u_races)}
-    Overall CV accuracy: {np.mean(accs)}
-    Model: {model}
-    Test frac.: {test_frac}
-  """)
-
-  if (debug and isinstance(pl.named_steps['model'], LinearRegression)):
-    coef = pd.DataFrame()
-    coef['features'] = features
-    coef['coef'] = pl.named_steps['model'].coef_
-    print(coef.sort_values('coef'))
-
-
-# pred_topn_split(df, top_n=10, model = RandomForestRegressor(random_state=111, n_estimators=100))
-for top_n in [10]:
-  # for model in [LinearRegression(), RandomForestRegressor(random_state=111, n_estimators=100)]:
-  for model in [RandomForestRegressor(random_state=111)]:
-    pred_topn_split(df, model, top_n=top_n, debug=True)
+# %%
+# def pred_topn_split(data, model, top_n=10, test_frac=.2, debug=False):
+#   u_races = data[RACE_ID].sample(frac=1, random_state=111).unique()  # shuffle dataset
+#   nu_races = len(u_races)
+#   # 80/20 train test split cross validation, predicting every race from test iteratively
+#   test_size = math.ceil(len(u_races) * test_frac)
+#
+#   accs = []
+#   # for every CV interval
+#   for pred_j in range(math.ceil(nu_races / test_size)):
+#
+#     sel_fr = pred_j * test_size
+#     sel_to = (pred_j + 1) * test_size if (pred_j + 1) * test_size < nu_races else nu_races
+#     test_races = list(u_races[sel_fr:sel_to])
+#
+#     if (debug):
+#       print(f'Testing on races {sel_fr}-{sel_to}/{nu_races}')
+#
+#     train = data[~data[RACE_ID].isin(test_races)]
+#     X_train = train[features]
+#     y_train = train[target]
+#     # fit the model for the training data
+#     pl = Pipeline(steps=[
+#       ('scaler', StandardScaler()),
+#       ('model', model)
+#     ])
+#     pl.fit(X_train, y_train)
+#
+#     for i, pred_race in enumerate(test_races):
+#       test = data[data[RACE_ID] == pred_race]
+#       X_test = test[features]
+#
+#       test[PRED_I] = pl.predict(X_test)  # predict values
+#
+#       top_pred = test.sort_values(PRED_I, ascending=False).head(top_n)
+#       i_acc = sum(top_pred['race_race_rank'] <= top_n) / top_n
+#       accs.append(i_acc)
+#       if (debug):
+#         print(
+#           f"[{i + 1}/{len(test_races)}] Race: {pred_race} (ProfileScore: {int(test['race_profile-score'].head(1))})")
+#         print(top_pred[['rider_rider_id', 'race_race_rank', PRED_I]])
+#         print(f"Accuracy: {i_acc}")
+#
+#   print(f"""
+#     Predicted top competitors: {top_n}
+#     Unique races: {len(u_races)}
+#     Overall CV accuracy: {np.mean(accs)}
+#     Model: {model}
+#     Test frac.: {test_frac}
+#   """)
+#
+#   if (debug and isinstance(pl.named_steps['model'], LinearRegression)):
+#     coef = pd.DataFrame()
+#     coef['features'] = features
+#     coef['coef'] = pl.named_steps['model'].coef_
+#     print(coef.sort_values('coef'))
+#
+#
+# # pred_topn_split(df, top_n=10, model = RandomForestRegressor(random_state=111, n_estimators=100))
+# for top_n in [10, 1]:
+#   # for model in [LinearRegression(), RandomForestRegressor(random_state=111, n_estimators=100)]:
+#   for model in [RandomForestRegressor(random_state=111)]:
+#     pred_topn_split(df, model, top_n=top_n, debug=True)
 
 # %%
 # import statsmodels.api as sm
